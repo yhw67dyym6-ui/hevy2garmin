@@ -2,10 +2,14 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { withBasePath } from "@/lib/base-path";
 
 interface Props {
   /** A GitHub token is saved (platform_credentials 'github'); the value itself is never sent to the browser. */
   githubTokenSet?: boolean;
+  /** A self-hosted server's own sync schedule (lib/server-schedule.ts). When set, the
+      GitHub token and the auto-sync controls, which only drive GitHub Actions, are hidden. */
+  serverSchedule?: string | null;
   autoSyncEnabled: boolean;
   autoSyncInterval: number;
   hrFusionEnabled: boolean;
@@ -77,7 +81,7 @@ export function SettingsForm(p: Props) {
   async function pullFromGarmin() {
     setPulling(true); setPullMsg(null);
     try {
-      const res = await fetch("/api/pull-garmin-profile", { method: "POST" });
+      const res = await fetch(withBasePath("/api/pull-garmin-profile"), { method: "POST" });
       const j = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; profile?: { weight_kg?: number | null; birth_year?: number | null; sex?: string | null; vo2max?: number | null } };
       if (!res.ok || !j.ok || !j.profile) { setPullMsg(j.error ?? `Request failed (${res.status}).`); return; }
       if (j.profile.weight_kg != null) setWeight(String(j.profile.weight_kg));
@@ -159,7 +163,7 @@ export function SettingsForm(p: Props) {
         },
       };
       if (githubPat.trim()) (body as Record<string, unknown>).github_pat = githubPat.trim();
-      const res = await fetch("/api/settings", {
+      const res = await fetch(withBasePath("/api/settings"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -180,14 +184,23 @@ export function SettingsForm(p: Props) {
 
   return (
     <form onSubmit={submit} className="space-y-6">
-      <div className={cardCls}>
+      {!p.serverSchedule && <div className={cardCls}>
         <label className={labelCls} htmlFor="github_pat">GitHub token (auto-sync on your fork)</label>
         <input id="github_pat" type="password" autoComplete="off" value={githubPat} onChange={(e) => setGithubPat(e.target.value)}
           placeholder={p.githubTokenSet ? "•••• saved — enter a new one to replace it" : "ghp_… (repo + workflow scope)"} className={controlCls} />
         <p className="mt-0.5 text-xs text-text-muted">Stored in your database, same row the Python dashboard uses. Needed to enable auto-sync on Vercel.</p>
-      </div>
+      </div>}
       {/* Sync */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        {p.serverSchedule ? (
+          <div className={cardCls}>
+            <span className="text-sm font-semibold text-text">Auto-sync</span>
+            <p className="mt-0.5 text-xs text-text-muted">
+              This server syncs {p.serverSchedule}, and the Hevy webhook syncs each finished workout.
+              The schedule is part of the server&apos;s deployment.
+            </p>
+          </div>
+        ) : (
         <div className={cardCls}>
           <label className="flex items-center justify-between gap-2">
             <span className="text-sm font-semibold text-text">Auto-sync</span>
@@ -199,6 +212,7 @@ export function SettingsForm(p: Props) {
             {INTERVALS.map((m) => (<option key={m} value={m}>{fmtInterval(m)}</option>))}
           </select>
         </div>
+        )}
         <Toggle label="HR fusion" checked={hrFusion} onChange={setHrFusion} hint="Pull heart-rate from a matched Garmin activity into the synced workout." />
       </div>
 

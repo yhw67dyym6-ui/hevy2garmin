@@ -318,6 +318,7 @@ def find_matching_garmin_activity(
     overlap_threshold: float = 0.70,
     max_drift_minutes: int = 20,
     activity_types: set[str] | None = None,
+    exclude_activity_ids: list[int | str] | set[int | str] | None = None,
 ) -> dict | None:
     """Find a user-recorded Garmin activity matching a Hevy workout.
 
@@ -329,9 +330,14 @@ def find_matching_garmin_activity(
     ``activity_types`` (default: ``{"strength_training"}``). Pass additional
     types (e.g. ``"bouldering"``, ``"indoor_climbing"``) to also enhance
     non-strength watch activities with Hevy exercise data.
+
+    ``exclude_activity_ids`` are activities the caller already knows belong to
+    another Hevy workout, so back-to-back sessions do not merge into each
+    other's upload (#796).
     """
     if activity_types is None:
         activity_types = {"strength_training"}
+    excluded = {str(activity_id) for activity_id in (exclude_activity_ids or [])}
     from datetime import datetime, timedelta, timezone
 
     start_raw = hevy_workout.get("start_time") or hevy_workout.get("startTime", "")
@@ -362,6 +368,10 @@ def find_matching_garmin_activity(
     best: dict | None = None
 
     for act in activities or []:
+        # Skip activities the ledger already maps to another Hevy workout, so a
+        # back-to-back session does not merge into a sibling's upload (#796).
+        if str(act.get("activityId")) in excluded:
+            continue
         # Hard filter: only configured activity types are eligible for merge
         act_type = act.get("activityType", {}).get("typeKey", "")
         if act_type not in activity_types:
@@ -569,19 +579,19 @@ def generate_description(
         for ex in exercises:
             name = ex.get("title") or ex.get("name", "Unknown")
             all_sets = ex.get("sets", [])
-            normal = [s for s in all_sets if s.get("type") == "normal"]
+            working = [s for s in all_sets if s.get("type") != "warmup"]
             warmup = [s for s in all_sets if s.get("type") == "warmup"]
-            if normal:
-                n_label = "set" if len(normal) == 1 else "sets"
+            if working:
+                n_label = "set" if len(working) == 1 else "sets"
                 # Check if this is a cardio exercise (has distance or duration, no weight/reps)
-                has_distance = any(s.get("distance_meters") for s in normal)
-                has_duration = any(s.get("duration_seconds") for s in normal)
-                has_weight = any(s.get("weight_kg") or s.get("weight") for s in normal)
+                has_distance = any(s.get("distance_meters") for s in working)
+                has_duration = any(s.get("duration_seconds") for s in working)
+                has_weight = any(s.get("weight_kg") or s.get("weight") for s in working)
                 if has_distance or (has_duration and not has_weight):
                     # Cardio: show distance and/or duration
-                    total_dist = sum(s.get("distance_meters", 0) or 0 for s in normal)
-                    total_dur = sum(s.get("duration_seconds", 0) or 0 for s in normal)
-                    parts = [f"{len(normal)} {n_label}"]
+                    total_dist = sum(s.get("distance_meters", 0) or 0 for s in working)
+                    total_dur = sum(s.get("duration_seconds", 0) or 0 for s in working)
+                    parts = [f"{len(working)} {n_label}"]
                     if total_dist > 0:
                         parts.append(f"{total_dist / 1000:.1f}km")
                     if total_dur > 0:
@@ -590,14 +600,14 @@ def generate_description(
                 else:
                     weights = [
                         w
-                        for s in normal
+                        for s in working
                         if (w := (s.get("weight_kg") or s.get("weight"))) is not None
                     ]
-                    reps = [r for s in normal if (r := s.get("reps")) is not None]
+                    reps = [r for s in working if (r := s.get("reps")) is not None]
                     top_weight = max(weights) if weights else 0
                     top_reps = max(reps) if reps else 0
                     lines.append(
-                        f"• {name}: {len(normal)} {n_label} · {top_weight:.1f}kg × {top_reps}"
+                        f"• {name}: {len(working)} {n_label} · {top_weight:.1f}kg × {top_reps}"
                     )
             elif warmup:
                 s_label = "set" if len(warmup) == 1 else "sets"

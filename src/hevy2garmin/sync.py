@@ -404,6 +404,7 @@ def sync_one_workout(
     merge_max_drift_min = cfg.get("merge_max_drift_min", 20)
     merge_activity_types = set(cfg.get("merge_activity_types", ["strength_training"]))
     merge_watch_strategy = cfg.get("merge_watch_strategy", "merge")
+    merge_preserve_watch_timing = cfg.get("merge_preserve_watch_timing", True)
     description_enabled = cfg.get("description_enabled", True)
     hr_fusion_on = cfg.get("hr_fusion", {}).get("enabled", True)
 
@@ -420,6 +421,7 @@ def sync_one_workout(
             max_drift_minutes=merge_max_drift_min,
             activity_types=merge_activity_types,
             watch_strategy=merge_watch_strategy,
+            preserve_watch_timing=merge_preserve_watch_timing,
         )
         if merge_result.merged:
             fit_stats = _estimate_fit_stats(workout)
@@ -508,6 +510,7 @@ def sync_one_workout(
                 max_drift_minutes=merge_max_drift_min,
                 activity_types=merge_activity_types,
                 watch_strategy="merge",
+                preserve_watch_timing=merge_preserve_watch_timing,
             )
             if fallback.merged:
                 fit_stats = _estimate_fit_stats(workout)
@@ -577,7 +580,15 @@ def sync_one_workout(
 
         existing_id = None
         uploaded = False
-        exclude_ids = [merge_delete_id] if merge_delete_id else None
+        # Exclude the watch copy this run will delete, plus every activity the
+        # ledger already maps to another Hevy workout, so a back-to-back session
+        # is not mistaken for "already on Garmin" (#796).
+        exclude_ids: list[int | str] = [merge_delete_id] if merge_delete_id else []
+        try:
+            exclude_ids += merge_store.known_garmin_activity_ids(exclude_hevy_id=wid)
+        except Exception as exc:  # noqa: BLE001  # a ledger read failure must not block the upload
+            logger.debug("  Could not read known activity ids from the ledger: %s", exc)
+        exclude_ids = exclude_ids or None
         if start_time and not force_upload and not merge_forced_fresh:
             existing_id = find_activity_by_start_time(
                 garmin_client,
